@@ -93,8 +93,8 @@ def switchPreProcessing(band1,band2,mode="01"):
     start=time.time()
     if mode=="01":        
 
-        X_band_3=np.array([(band-np.min(band)/(np.max(band)-np.min(band))) for band in band1])
-        X_band_4=np.array([(band-np.min(band)/(np.max(band)-np.min(band))) for band in band2])
+        X_band_3=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in band1])
+        X_band_4=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in band2])
         X_band_5=np.fabs(np.subtract(X_band_3,X_band_4))
     elif mode=="02":
         X_band_3=np.fabs(np.subtract(band1,band2))
@@ -215,22 +215,25 @@ vote_sub_file="sub_vote14.csv"
 
 ###不使用投票法进行预测
 ##确定是否训练新的模型
-preprocess_mode="09"
+preprocess_mode="01"
 show_pics=False
 training_mode=False
 train_load_model=False
-train_load_path="figure_weights/figure09_83.hdf5"
-train_save_path = "figure_weights/figure09.hdf5"
-train_log_path = "figure_weights/figure09_log.csv"
+train_load_path="figure_weights/figure01_test5.hdf5"
+train_save_path = "figure_weights/figure01_test5.hdf5"
+train_log_path = "figure_weights/figure01_log_test5.csv"
 
 ###输出每个模型关于训练数据的预测
-output_training_pred=True
+output_training_pred=False
 ##不训练新模型，测试模型
 #preprocess_mode="04"
 epo=139
 test_load_model="figure_weights/figure"+preprocess_mode+"_"+str(epo)+".hdf5"
-test_sub_file="sub_figure"+preprocess_mode+"_"+str(epo)+".csv"
+#test_sub_file="sub_figure"+preprocess_mode+"_"+str(epo)+".csv"
+test_sub_file="figure01_test5.csv"
 
+##是否提取特征
+feature_extraction=True
 
 train = pd.read_json("input/train.json")
 target_train=train['is_iceberg']
@@ -266,7 +269,7 @@ print(len(X_band_test_1))
 from keras.optimizers import RMSprop
 from keras.preprocessing.image import ImageDataGenerator
 from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, Activation
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, Activation, Merge
 from keras.layers import *
 from keras.layers.normalization import BatchNormalization
 from keras.layers.merge import Concatenate
@@ -315,7 +318,7 @@ def binary_crossentropy(y_true,y_pred):
 # Finally create generator
 def get_callbacks(filepath, patience=2):
 #   es = EarlyStopping('val_loss', patience=200, mode="min")
-   msave = ModelCheckpoint(filepath, monitor='val_loss', mode='min', save_best_only=True)
+   msave = ModelCheckpoint(filepath, monitor='val_acc', mode='max', save_best_only=True)
    csv=CSVLogger(train_log_path, append=True)
    return [csv, msave]
 
@@ -341,8 +344,89 @@ def getVggAngleModel(X_train):
     model.compile(loss='binary_crossentropy',
                   optimizer=sgd,
                   metrics=['accuracy'])
+    model.summary()
     return model
+##use VGG16 to do the feature extraction
+def vgg16light_extract_features(x_train,y_train,x_angle,file_path):
+    model=Sequential()
+#    conv_base=VGG16(weights="imagenet",include_top=False,input_shape=(75,75,3))
+#    conv_base.summary()
+    conv_base=Sequential()
+    channel_=0.5
+    conv_base.add(Conv2D(int(16*channel_),(3,3),activation="relu",padding="same",input_shape=(75,75,3)))
+    conv_base.add(Conv2D(int(16*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(MaxPooling2D((2,2)))
+    conv_base.add(Conv2D(int(32*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(32*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(MaxPooling2D((2,2)))    
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+#    conv_base.add(Dropout(0.2))
 
+    conv_base.add(MaxPooling2D((2,2)))   
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+#    conv_base.add(Dropout(0.2))
+
+    conv_base.add(MaxPooling2D((2,2)))   
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
+#    conv_base.add(Dropout(0.2))
+
+    conv_base.add(MaxPooling2D((2,2)))   
+    conv_base.add(Flatten())
+    
+    angle_base=Sequential()
+    angle_base.add(Dense(32,input_shape=(1,),activation="relu"))
+#    angle_base = Dense(1,input_shape=(1,))
+    model.add(Merge([conv_base,angle_base], mode='concat'))
+    
+    model.add(Dense(int(64*channel_)))
+    model.add(Dropout(0.5))
+    model.add(Dense(1,activation="sigmoid"))
+    
+    modeltwo=Model([conv_base.input,angle_base.input],model.output)
+
+    modeltwo.compile(optimizer="rmsprop",
+                      loss="binary_crossentropy",
+                      metrics=["acc"])
+    modeltwo.summary()
+    callbacks = get_callbacks(filepath=file_path, patience=10)
+#    l=len(x_train)
+#    data_gen=gen.flow(x_train[:int(l*0.8)],y_train[:int(l*0.8)])
+#    val_gen=gen.flow(x_train[int(l*0.8):],y_train[int(l*0.8):])
+#    history=model.fit_generator(data_gen,
+#                          epochs=500,
+#                          steps_per_epoch=24,
+#                          callbacks=callbacks,
+#                          validation_data=val_gen)
+#    history=model.fit(x_train,y_train,
+#                      epochs=500,
+#                      batch_size=128,
+#                      callbacks=callbacks,
+#                      validation_split=0.2)
+
+#    history=modeltwo.fit([x_train,x_angle],y_train,
+#                      epochs=500,
+#                      batch_size=128,
+#                      callbacks=callbacks,
+#                      validation_split=0.2)
+#
+    modeltwo.load_weights(train_load_path)
+#    model.load_weights(train_load_path)
+    print("Loading weights from "+train_load_path)
+    loss,acc=modeltwo.evaluate([x_train,x_angle],y_train)
+#    loss,acc=model.evaluate(x_train,y_train)
+    print("Loss of training data:"+str(loss))
+    print("Acc of training data:"+str(acc))
+    test_preds=modeltwo.predict([X_test, X_test_angle]).reshape(len(X_test))
+    submission = pd.DataFrame()
+    submission['id']=test['id']
+    submission['is_iceberg']=test_preds
+    submission.to_csv(test_sub_file, index=False)
 #No CV with Data Augmentation.
 def myAngleCV(X_train, X_angle, X_test,file_path):
     K=5
@@ -526,7 +610,14 @@ elif output_training_pred:
         submission['id']=train['id']
         submission['is_iceberg']=temp_train_all
         submission.to_csv(opj("training_predictions","training_"+file_paths[j]), index=False)        
+elif feature_extraction:
+    vgg16light_extract_features(X_train,target_train,X_angle,train_save_path)
+    import pandas as pd
+    df=pd.read_csv(train_log_path)
+    
+    df.to_csv(train_log_path,index=False)
 else:
+    
     preds=predict(X_test,X_test_angle,test_load_model)
     submission = pd.DataFrame()
     submission['id']=test['id']
