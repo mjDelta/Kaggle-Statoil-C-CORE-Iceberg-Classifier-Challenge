@@ -13,4 +13,9 @@ In the preprocessing, we use many methods for the preparation of stacking. And t
 ## 3.About Feature Extraction
 We chosen to use our own pretrained vgg16-like network to do the feature extraction. To do the next classification, we chosen scikit-learn's SVM.</br>
 
-
+## 4.About the Ensemble Model
+For Ensemble Modeling, we chosen blending and stacking.
+#### Blending
+For blending, we used pretrained VGG16's test results( with different data preprocessing) as single model. Then do Linear Regression with these single models, and got LB score 0.151.
+#### Stacking 
+For stacking,we used blending results, new defined network's results and SVM's results to do the stacking. Our best model came from the minmax_bestbase stacking method, and got LB score 0.1208.
