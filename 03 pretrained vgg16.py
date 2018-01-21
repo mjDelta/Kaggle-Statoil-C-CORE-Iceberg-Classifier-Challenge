@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Dec 13 10:28:33 2017
+Created on Sun Jan 21 16:19:40 2018
 
-@author: zmj
+@author: ZMJ
 """
+
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -14,146 +15,11 @@ import keras
 import tensorflow as tf
 from matplotlib import pyplot as plt
 from numpy import *
-import pywt
 import time
 from scipy.ndimage import gaussian_filter
 from skimage import img_as_float
 from skimage.morphology import reconstruction
-##ROF去噪
-def denoise_rof(im, U_init, tolerance=0.1, tau=0.125, tv_weight=100):
-    """ An implementation of the Rudin-Osher-Fatemi (ROF) denoising model
-        using the numerical procedure presented in Eq. (11) of A. Chambolle
-        (2005). Implemented using periodic boundary conditions 
-        (essentially turning the rectangular image domain into a torus!).
-    
-        Input:
-        im - noisy input image (grayscale)
-        U_init - initial guess for U
-        tv_weight - weight of the TV-regularizing term
-        tau - steplength in the Chambolle algorithm
-        tolerance - tolerance for determining the stop criterion
-    
-        Output:
-        U - denoised and detextured image (also the primal variable)
-        T - texture residual"""
-    
-    #---Initialization
-    m,n = im.shape #size of noisy image
-
-    U = U_init
-    Px = im #x-component to the dual field
-    Py = im #y-component of the dual field
-    error = 1 
-    iteration = 0
-
-    #---Main iteration
-    while (error > tolerance):
-        Uold = U
-
-        #Gradient of primal variable
-        LyU = np.vstack((U[1:,:],U[0,:])) #Left translation w.r.t. the y-direction
-        LxU = np.hstack((U[:,1:],U.take([0],axis=1))) #Left translation w.r.t. the x-direction
-
-        GradUx = LxU-U #x-component of U's gradient
-        GradUy = LyU-U #y-component of U's gradient
-
-        #First we update the dual varible
-        PxNew = Px + (tau/tv_weight)*GradUx #Non-normalized update of x-component (dual)
-        PyNew = Py + (tau/tv_weight)*GradUy #Non-normalized update of y-component (dual)
-        NormNew = np.maximum(1,np.sqrt(PxNew**2+PyNew**2))
-
-        Px = PxNew/NormNew #Update of x-component (dual)
-        Py = PyNew/NormNew #Update of y-component (dual)
-
-        #Then we update the primal variable
-        RxPx =np.hstack((Px.take([-1],axis=1),Px[:,0:-1])) #Right x-translation of x-component
-        RyPy = np.vstack((Py[-1,:],Py[0:-1,:])) #Right y-translation of y-component
-        DivP = (Px-RxPx)+(Py-RyPy) #Divergence of the dual field.
-        U = im + tv_weight*DivP #Update of the primal variable
-
-        #Update of error-measure
-        error = np.linalg.norm(U-Uold)/np.sqrt(n*m);
-        iteration += 1;
-
-    #The texture residual
-#    T = im - U
-    
-    return U
-##形态学
-def transform(img):
-
-    img=gaussian_filter(img,2.5)
-    seed=np.copy(img)
-    seed[1:-1,1:-1]=img.min()
-    mask=img
-    ##morphology processing
-    pro_img=reconstruction(seed,mask,method="dilation")
-    return img-pro_img
-def switchPreProcessing(band1,band2,mode="01"):
-    start=time.time()
-    if mode=="01":        
-
-        X_band_3=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in band1])
-        X_band_4=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in band2])
-        X_band_5=np.fabs(np.subtract(X_band_3,X_band_4))
-    elif mode=="02":
-        X_band_3=np.fabs(np.subtract(band1,band2))
-        X_band_4=np.maximum(band1,band2)
-        X_band_5=np.minimum(band1,band2)
-    elif mode=="03":
-        x_band_temp=band1+band2
-        X_band_3=np.array([(band-np.mean(band)/(np.max(band)-np.min(band))) for band in band1])
-        X_band_4=np.array([(band-np.mean(band)/(np.max(band)-np.min(band))) for band in band2])
-        X_band_5=np.array([(band-np.mean(band)/(np.max(band)-np.min(band))) for band in x_band_temp])
-    elif mode=="04":
-        x_band_temp=band1+band2
-        
-        X_band_3=np.array([(band-np.min(band)/(np.max(band)-np.min(band))) for band in band1])
-        X_band_4=np.array([(band-np.min(band)/(np.max(band)-np.min(band))) for band in band2])
-        X_band_5=np.array([(band-np.min(band)/(np.max(band)-np.min(band))) for band in x_band_temp])
-    elif mode=="05":##傅里叶变换
-        x_band_temp=band1+band2
-        X_band_3=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in band1])
-        X_band_4=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in band2])
-        X_band_5=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in x_band_temp])
-    elif mode=="06":##ROF去噪
-        x_band_temp=band1+band2
-        X_band_3=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in band1])
-        X_band_4=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in band2])
-        X_band_5=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in x_band_temp])      
-    elif mode=="07":#先ROF再傅里叶变换
-        x_band_temp=band1+band2
-        X_band_3_temp=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in band1])
-        X_band_4_temp=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in band2])
-        X_band_5_temp=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in x_band_temp])      
-
-        X_band_3=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in X_band_3_temp])
-        X_band_4=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in X_band_4_temp])
-        X_band_5=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in X_band_5_temp])   
-    elif mode=="08":#先傅里叶变换再ROF
-        x_band_temp=band1+band2
-        X_band_3_temp=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in band1])
-        X_band_4_temp=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in band2])
-        X_band_5_temp=np.array([np.abs(np.fft.ifft2(np.fft.ifftshift(np.fft.fftshift(np.fft.fft2((band-np.min(band))/(np.max(band)-np.min(band))))))) for band in x_band_temp])        
-        
-        X_band_3=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in X_band_3_temp])
-        X_band_4=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in X_band_4_temp])
-        X_band_5=np.array([denoise_rof((band-np.min(band))/(np.max(band)-np.min(band)),(band-np.min(band))/(np.max(band)-np.min(band))) for band in X_band_5_temp])   
-    elif mode=="09":#形态学变换
-        x_band_temp=band1+band2
-        
-        X_band_3_temp=np.array([transform(band) for band in band1])
-        X_band_4_temp=np.array([transform(band) for band in band2])
-        X_band_5_temp=np.array([transform(band) for band in x_band_temp])      
-        
-        X_band_3=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in X_band_3_temp])
-        X_band_4=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in X_band_4_temp])
-        X_band_5=np.array([(band-np.min(band))/(np.max(band)-np.min(band)) for band in X_band_5_temp])
-    print("Preprocessing mode : "+mode+" Prepare time:"+str(time.time()-start)+"s")
-    X_train_ = np.concatenate([X_band_3[:, :, :, np.newaxis],X_band_4[:, :, :, np.newaxis],X_band_5[:, :, :, np.newaxis]], axis=-1)
-
-    return X_band_3,X_band_4,X_band_5,X_train_
-    
+from preprocessing import *
 def show_demo_pics(X_band_3,X_band_4,X_band_5,X_train,show=False):
     if show:
         plt.subplots(22)
@@ -232,9 +98,6 @@ test_load_model="figure_weights/figure"+preprocess_mode+"_"+str(epo)+".hdf5"
 #test_sub_file="sub_figure"+preprocess_mode+"_"+str(epo)+".csv"
 test_sub_file="figure01_test5.csv"
 
-##是否提取特征
-feature_extraction=True
-
 train = pd.read_json("input/train.json")
 target_train=train['is_iceberg']
 test = pd.read_json("input/test.json")
@@ -265,31 +128,15 @@ print("完成加载数据")
 print(len(X_band_1))
 print(len(X_band_test_1))
 
-
-from keras.optimizers import RMSprop
 from keras.preprocessing.image import ImageDataGenerator
 from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, Activation, Merge
-from keras.layers import *
-from keras.layers.normalization import BatchNormalization
-from keras.layers.merge import Concatenate
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, Merge, GlobalMaxPooling2D, GlobalAveragePooling2D
 from keras.models import Model
-from keras import initializers
 from keras.optimizers import Adam
-from keras.optimizers import rmsprop
-from keras.layers.advanced_activations import LeakyReLU, PReLU
-from keras.optimizers import SGD
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping, CSVLogger
+from keras.callbacks import ModelCheckpoint, CSVLogger
 
-from keras.datasets import cifar10
-from keras.applications.inception_v3 import InceptionV3
 from keras.applications.vgg16 import VGG16
-from keras.applications.xception import Xception
-from keras.applications.mobilenet import MobileNet
-from keras.applications.vgg19 import VGG19
-from keras.layers import Concatenate, Dense, LSTM, Input, concatenate
-from keras.preprocessing import image
-from keras.applications.vgg16 import preprocess_input	
+from keras.layers import concatenate
 from sklearn.linear_model import LogisticRegression
 
 # Define the image transformations here
@@ -346,87 +193,7 @@ def getVggAngleModel(X_train):
                   metrics=['accuracy'])
     model.summary()
     return model
-##use VGG16 to do the feature extraction
-def vgg16light_extract_features(x_train,y_train,x_angle,file_path):
-    model=Sequential()
-#    conv_base=VGG16(weights="imagenet",include_top=False,input_shape=(75,75,3))
-#    conv_base.summary()
-    conv_base=Sequential()
-    channel_=0.5
-    conv_base.add(Conv2D(int(16*channel_),(3,3),activation="relu",padding="same",input_shape=(75,75,3)))
-    conv_base.add(Conv2D(int(16*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(MaxPooling2D((2,2)))
-    conv_base.add(Conv2D(int(32*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(32*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(MaxPooling2D((2,2)))    
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-#    conv_base.add(Dropout(0.2))
 
-    conv_base.add(MaxPooling2D((2,2)))   
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-#    conv_base.add(Dropout(0.2))
-
-    conv_base.add(MaxPooling2D((2,2)))   
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-    conv_base.add(Conv2D(int(64*channel_),(3,3),activation="relu",padding="same"))
-#    conv_base.add(Dropout(0.2))
-
-    conv_base.add(MaxPooling2D((2,2)))   
-    conv_base.add(Flatten())
-    
-    angle_base=Sequential()
-    angle_base.add(Dense(32,input_shape=(1,),activation="relu"))
-#    angle_base = Dense(1,input_shape=(1,))
-    model.add(Merge([conv_base,angle_base], mode='concat'))
-    
-    model.add(Dense(int(64*channel_)))
-    model.add(Dropout(0.5))
-    model.add(Dense(1,activation="sigmoid"))
-    
-    modeltwo=Model([conv_base.input,angle_base.input],model.output)
-
-    modeltwo.compile(optimizer="rmsprop",
-                      loss="binary_crossentropy",
-                      metrics=["acc"])
-    modeltwo.summary()
-    callbacks = get_callbacks(filepath=file_path, patience=10)
-#    l=len(x_train)
-#    data_gen=gen.flow(x_train[:int(l*0.8)],y_train[:int(l*0.8)])
-#    val_gen=gen.flow(x_train[int(l*0.8):],y_train[int(l*0.8):])
-#    history=model.fit_generator(data_gen,
-#                          epochs=500,
-#                          steps_per_epoch=24,
-#                          callbacks=callbacks,
-#                          validation_data=val_gen)
-#    history=model.fit(x_train,y_train,
-#                      epochs=500,
-#                      batch_size=128,
-#                      callbacks=callbacks,
-#                      validation_split=0.2)
-
-#    history=modeltwo.fit([x_train,x_angle],y_train,
-#                      epochs=500,
-#                      batch_size=128,
-#                      callbacks=callbacks,
-#                      validation_split=0.2)
-#
-    modeltwo.load_weights(train_load_path)
-#    model.load_weights(train_load_path)
-    print("Loading weights from "+train_load_path)
-    loss,acc=modeltwo.evaluate([x_train,x_angle],y_train)
-#    loss,acc=model.evaluate(x_train,y_train)
-    print("Loss of training data:"+str(loss))
-    print("Acc of training data:"+str(acc))
-    test_preds=modeltwo.predict([X_test, X_test_angle]).reshape(len(X_test))
-    submission = pd.DataFrame()
-    submission['id']=test['id']
-    submission['is_iceberg']=test_preds
-    submission.to_csv(test_sub_file, index=False)
 #No CV with Data Augmentation.
 def myAngleCV(X_train, X_angle, X_test,file_path):
     K=5
@@ -610,16 +377,11 @@ elif output_training_pred:
         submission['id']=train['id']
         submission['is_iceberg']=temp_train_all
         submission.to_csv(opj("training_predictions","training_"+file_paths[j]), index=False)        
-elif feature_extraction:
-    vgg16light_extract_features(X_train,target_train,X_angle,train_save_path)
-    import pandas as pd
-    df=pd.read_csv(train_log_path)
-    
-    df.to_csv(train_log_path,index=False)
+
 else:
     
     preds=predict(X_test,X_test_angle,test_load_model)
     submission = pd.DataFrame()
     submission['id']=test['id']
     submission['is_iceberg']=preds
-    submission.to_csv(test_sub_file, index=False)
+submission.to_csv(test_sub_file, index=False)
